@@ -95,10 +95,20 @@ class FtpWrapper(object):
         try:
             self.paramiko_sftp.rename(source, destination)
 
-        except IOError:
-            self.logger.error("ERROR: Could not move file to archive " + source)
+        except IOError as e:
+            self.logger.error("ERROR: Could not move file " + source + " to destination " + destination +
+                                                                     " Reason:" + e.strerror)
 
         self.logger.info("SUCCESS: original file archived")
+
+    def archive(self, source, filename, destination_subdir):
+        zip_file = filename.replace(".txt", ".zip")
+        zip_command = "zip " + source + "/" + zip_file + " " + source + "/" + filename
+        self.paramiko_ssh.exec_command(zip_command)
+        self.logger.info("INFO: Executed " + zip_command)
+        self.move(source + "/" + zip_file, source + "/archive/" + zip_file)
+        self.logger.info("SUCCESS: File compressed and moved to archive. In debug no deletion of original file")
+        # self.delete_file(source + "/" +filename)
 
     def close(self):
         self.paramiko_ssh.close()
@@ -161,21 +171,17 @@ class HadoopFileIngestionTool(object):
             all_objects = ftp_wrapper.dir(stream.remote_directory)
             if all_objects is None:
                 continue
-            for current_file in all_objects:
-                if re.match(current_file, stream.filename_schema) is None:
-                    self.logger.warn('file name convention mismatch: ' + current_file + " " + stream.filename_schema)
-                    # ftp_wrapper.move(full_remote_path, stream.remote_directory + '/error/' + current_file)
 
+            for current_file in all_objects:
                 full_remote_path = stream.remote_directory + '/' + current_file
                 full_destination_path = stream.edge_dir + '/' + current_file
-                ftp_wrapper.get(full_remote_path, full_destination_path)
 
-                if stream.archive_action.lower() == "keep":
-                    # ftp_wrapper.move(full_remote_path, stream.remote_directory + '/archive/' + current_file)
-                    self.logger.info("DEACTIVATED for now: moving file to archive")
-                else:
-                    # ftp_wrapper.delete_file(full_remote_path)
-                    self.logger.info("DEACTIVATED for now: deleting file")
+                if re.match(stream.filename_schema, current_file) is None:
+                    self.logger.warn('file name convention mismatch: ' + current_file + " " + stream.filename_schema)
+                    ftp_wrapper.move(full_remote_path, stream.remote_directory + '/error/' + current_file)
+                    continue
+
+                ftp_wrapper.get(full_remote_path, full_destination_path)
 
                 try:
                     subprocess.call('hdfs dfs -put ' + full_destination_path + ' ' +
@@ -189,6 +195,14 @@ class HadoopFileIngestionTool(object):
 
                 subprocess.call('hdfs dfs -rm ' + full_destination_path, shell=True)
                 self.logger.info("File deleted on HDFS")
+
+                if stream.archive_action.lower() == "keep":
+                    ftp_wrapper.archive(stream.remote_directory, current_file, "archive")
+                    self.logger.info("DEACTIVATED for now: moving file to archive")
+                else:
+                    # ftp_wrapper.delete_file(full_remote_path)
+                    self.logger.info("DEACTIVATED for now: deleting file")
+
 
     def run(self):
         self.configure_logger()
