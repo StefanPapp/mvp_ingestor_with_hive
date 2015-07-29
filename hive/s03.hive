@@ -1,0 +1,15 @@
+CREATE TABLE s03
+(
+	meas_day bigint,
+	imsiv bigint,
+	luacc_nu int,
+	luacc_pu int,
+	ho_from_3g_ne int,
+	tc_not_resp int,
+	calls_fail int,
+	calls int,
+	tracefile string
+)
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\;'
+STORED AS ORC
+;

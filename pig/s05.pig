@@ -1,5 +1,5 @@
 cd $LANDDIR
-collection = LOAD '$INPUTFILE' USING PigStorage('|')
+collection = LOAD '$INPUTFILE' USING PigStorage(';')
 AS (
 	datetime:chararray, 	
 	msisdn:long,	

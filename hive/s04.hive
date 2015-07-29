@@ -1,0 +1,19 @@
+CREATE TABLE s04
+(
+	imsi bigint,
+	cs_calls int,
+	cs_fail	int,
+	ps_normal_end	int,
+	regda	int,
+	ps_abnormal_release	int,
+	luacc_ia	int,
+	luacc_nu	int,
+	luacc_pu	int,
+	lufail_nu	int,
+	lurej_nu	int,
+	lurej_pu	int,
+	succ_reloc_voice int
+) PARTITIONED BY (meas_day bigint)  
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\;'
+STORED AS ORC
+;

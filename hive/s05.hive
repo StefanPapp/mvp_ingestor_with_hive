@@ -1,4 +1,4 @@
-CREATE TABLE procera
+CREATE TABLE s05
 (
 	datetime string, 	
 	msisdn bigint,	

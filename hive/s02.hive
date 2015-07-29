@@ -1,0 +1,10 @@
+CREATE TABLE s02
+(
+	interface string,
+	locupdates INT,
+	imsi bigint
+) PARTITIONED BY (day bigint)  
+ROW FORMAT DELIMITED FIELDS TERMINATED BY '\;'
+STORED AS ORC
+;
+
