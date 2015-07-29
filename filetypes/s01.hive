@@ -1,0 +1,8 @@
+CREATE TABLE s01
+(
+	day	bigint,
+	interface string,
+	locupdates double,
+	Imsi bigint
+)
+
