@@ -1,8 +1,8 @@
 cd $LANDDIR
 collection = LOAD '$INPUTFILE' USING PigStorage(';')
 AS (
-	meas_day: long
-	imsi: long
+	meas_day: long,
+	imsi: long,
 	luacc_nu: int,
 	luacc_pu: int,
 	ho_from_3g_ne: int,

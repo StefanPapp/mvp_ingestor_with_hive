@@ -18,7 +18,10 @@ import zipfile
 import re
 import socket
 import os
-
+import stat
+import time
+import sys
+import atexit
 
 class Stream(object):
     """
@@ -70,25 +73,35 @@ class FtpWrapper(object):
         return True
 
     def dir(self, directory):
-
         try:
-            content = self.paramiko_sftp.listdir(directory)
+            content = self.paramiko_sftp.listdir_attr(directory)
         except IOError:
             self.logger.error("Problem reading directory: " + directory + " at stream " + self.current_stream_code)
             return None
+        self.logger.info("SUCCESS: Read content of directory " + directory + " for stream " + self.current_stream_code )
         return content
 
     def get(self, source, destination):
-        self.paramiko_sftp.get(source, destination)
-        self.logger.info("SUCCESS: File transferred from " + source + " to " + destination)
+        self.logger.info("Start file transfer")
+        try:
+            self.paramiko_sftp.get(source, destination)
+        except IOError:
+            self.logger.error("File cannot be copied from " + source + " to " + destination)
+            return False
+        except Exception:
+            self.logger.error("File cannot be copied from " + source + " to " + destination)
+            return False
+        self.logger.info("SUCCESS: Copy File.  From " + source + " to " + destination)
+        return True
 
     def delete_file(self, file_name):
         try:
             self.paramiko_sftp.remove(file_name)
         except IOError:
             self.logger.error("ERROR: Could not delete file " + file_name)
+            return
 
-        self.logger.info("SUCCESS: original file deleted")
+        self.logger.info("SUCCESS: Delete file " + file_name)
 
     def move(self, source, destination):
 
@@ -96,19 +109,21 @@ class FtpWrapper(object):
             self.paramiko_sftp.rename(source, destination)
 
         except IOError as e:
-            self.logger.error("ERROR: Could not move file " + source + " to destination " + destination +
-                                                                     " Reason:" + e.strerror)
+            self.logger.error("Could not move file " + source + " to destination " + destination)
+            return
 
-        self.logger.info("SUCCESS: original file archived")
+        self.logger.info("SUCCESS: file move. From " + source + " to " + destination)
 
     def archive(self, source, filename, destination_subdir):
-        zip_file = filename.replace(".txt", ".zip")
-        zip_command = "zip " + source + "/" + zip_file + " " + source + "/" + filename
-        self.paramiko_ssh.exec_command(zip_command)
-        self.logger.info("INFO: Executed " + zip_command)
-        self.move(source + "/" + zip_file, source + "/archive/" + zip_file)
-        self.logger.info("SUCCESS: File compressed and moved to archive. In debug no deletion of original file")
-        # self.delete_file(source + "/" +filename)
+        zip_file_name = filename.replace(".txt", ".zip")
+        zip_command = "zip " + source + "/" + zip_file_name + " " + source + "/" + filename
+        si,so,se = self.paramiko_ssh.exec_command(zip_command)
+        readList = so.readlines()
+        errList = se.readlines()
+        self.logger.info(readList)
+        self.logger.info(errList)
+        self.logger.info("INFO: " + zip_command)
+        self.move(source + "/" + filename, source + "/" + destination_subdir + "/" + filename)
 
     def close(self):
         self.paramiko_ssh.close()
@@ -119,6 +134,7 @@ class FtpWrapper(object):
 class HadoopFileIngestionTool(object):
     config = ConfigParser.RawConfigParser()
     logger = logging.getLogger("HadoopFileIngestionTool")
+    report = logging.getLogger("Report")
     streams = []
 
     def configure_logger(self):
@@ -138,6 +154,14 @@ class HadoopFileIngestionTool(object):
 
         self.logger.addHandler(stream_handler)
         self.logger.addHandler(file_handler)
+
+        # report
+        self.report.setLevel(logging.INFO)
+        datestr = time.strftime("%Y%m%d_%H%M")
+        report_file_handler = logging.FileHandler('result_' + datestr + '.log')
+        report_file_handler.setLevel(logging.INFO)
+        report_file_handler.setFormatter(formatter)
+        self.report.addHandler(report_file_handler)
 
     def configure_streams(self):
         """ Sets stream. Each active stream is stored in a comma separated string in the active stream section
@@ -165,49 +189,93 @@ class HadoopFileIngestionTool(object):
         for stream in self.streams:
             ftp_wrapper = FtpWrapper()
             if ftp_wrapper.connect(stream) is False:
-                self.logger.info("Stream " + stream.stream_code + " ended as no connection to server possible")
                 continue
 
             all_objects = ftp_wrapper.dir(stream.remote_directory)
             if all_objects is None:
                 continue
 
-            for current_file in all_objects:
-                full_remote_path = stream.remote_directory + '/' + current_file
-                full_destination_path = stream.edge_dir + '/' + current_file
-
-                if re.match(stream.filename_schema, current_file) is None:
-                    self.logger.warn('file name convention mismatch: ' + current_file + " " + stream.filename_schema)
-                    ftp_wrapper.move(full_remote_path, stream.remote_directory + '/error/' + current_file)
+            for current_object in all_objects:
+                # ignore sub directory
+                if stat.S_ISDIR(current_object.st_mode):
+                    self.logger.info("Omitting. Current entry is a directory: " + current_object.filename)
                     continue
 
-                ftp_wrapper.get(full_remote_path, full_destination_path)
+                current_file = current_object.filename
+
+                full_remote_path = stream.remote_directory + '/' + current_file
+                full_destination_path = stream.edge_dir + '/' + current_file
+                full_hdfs_path = stream.hdfs_dir + '/' + current_file
+
+                if re.match(stream.filename_schema, current_file) is None:
+                    self.logger.warn('file schema mismatch: Current File: ' + current_file +
+                                     " Schema: " + stream.filename_schema)
+                    ftp_wrapper.move(full_remote_path, stream.remote_directory + '/error/' + current_file)
+                    self.report.info("FAIL AT Schema Validation: SC: " + stream.stream_code + " File: " + current_file)
+                    continue
+                self.logger.info("SUCCESS: Schema Validation. File: " + current_file +
+                                 " Schema: " + stream.filename_schema)
+
+                if ftp_wrapper.get(full_remote_path, full_destination_path) == False:
+                    self.report.info("FAIL AT GET: SC: " + stream.stream_code + " File: " + current_file)
+                    continue
 
                 try:
                     subprocess.call('hdfs dfs -put ' + full_destination_path + ' ' +
                                     stream.hdfs_dir, shell=True)
                 except OSError:
-                    self.logger.error("Could not upload file to hadoop " + current_file + ' ' + stream.hdfs_dir)
-                os.remove(full_destination_path)
-                self.logger.info("File deleted on edge node")
-                subprocess.call('pig -useHCatalog -p INPUTFILE=' + current_file + ' -p LANDDIR=' +
-                                stream.hdfs_dir + " ./pig/" + stream.pig_script, shell=True)
+                    self.logger.error("Could not upload file to HDFS " + current_file + ' ' + stream.hdfs_dir)
+                    self.report.info("FAIL AT HDFS Upload: SC: " + stream.stream_code + " File: " + current_file)
+                    continue
 
-                subprocess.call('hdfs dfs -rm ' + full_destination_path, shell=True)
-                self.logger.info("File deleted on HDFS")
+                os.remove(full_destination_path)
+                self.logger.info("SUCCESS: EDGE FILE DELETION. Filename: " + full_destination_path)
+                self.logger.info("Calling PIG")
+
+                pig_scr = 'pig -useHCatalog -4 ./pig/log4j_WARN -p INPUTFILE=' + current_file + " -p LANDDIR=" + \
+                          stream.hdfs_dir + " ./pig/" + stream.pig_script
+
+                ret_code = subprocess.call(pig_scr, shell=True)
+                if ret_code != 0:
+                    self.logger.error("Pig script returned error " + pig_scr)
+                    self.report.info("FAIL AT PIG: SC: " + stream.stream_code + " File: " + current_file)
+                    ftp_wrapper.archive(stream.remote_directory, current_file, "error")
+                    continue
+
+                ret_code = subprocess.call('hdfs dfs -rm ' + full_hdfs_path, shell=True)
+                if ret_code != 0:
+                    self.logger.error("HDFS DELETION. Filename: " + full_hdfs_path)
+                self.logger.info("SUCCESS: HDFS DELETION. Filename: " + full_hdfs_path)
 
                 if stream.archive_action.lower() == "keep":
                     ftp_wrapper.archive(stream.remote_directory, current_file, "archive")
-                    self.logger.info("DEACTIVATED for now: moving file to archive")
+                    self.logger.info("SUCCESS: REMOTE ARCHIVAL: " + stream.remote_directory + "/" + current_file)
                 else:
-                    # ftp_wrapper.delete_file(full_remote_path)
-                    self.logger.info("DEACTIVATED for now: deleting file")
+                    ftp_wrapper.delete_file(full_remote_path)
+                    self.logger.info("SUCCESS: REMOTE FILE DELETION: " + full_remote_path)
 
+                self.logger.info("SUCCESS: INGESTION FINISHED!!!!")
+                self.report.info("SUCCESS: SC: " + stream.stream_code + " File: " + current_file)
 
     def run(self):
+        pid = str(os.getpid())
+        pidfile = "mydaemon.pid"
+
+        if os.path.isfile(pidfile):
+            print "%s already exists, exiting" % pidfile
+            sys.exit()
+        else:
+            file(pidfile, 'w').write(pid)
+
         self.configure_logger()
         self.configure_streams()
         self.transfer_files()
+        os.unlink(pidfile)
+
+    @atexit.register
+    def termination(self):
+        if os.path.isfile("mydaemon.pid"):
+           os.unlink("mydaemon.pid")
 
 if __name__ == '__main__':
     HadoopFileIngestionTool().run()

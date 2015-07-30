@@ -1,7 +1,7 @@
 CREATE TABLE s03
 (
 	meas_day bigint,
-	imsiv bigint,
+	imsi bigint,
 	luacc_nu int,
 	luacc_pu int,
 	ho_from_3g_ne int,
