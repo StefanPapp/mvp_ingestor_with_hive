@@ -221,7 +221,7 @@ class HadoopFileIngestionTool(object):
                     continue
 
                 try:
-                    subprocess.call('hdfs dfs -put ' + full_destination_path + ' ' +
+                    subprocess.call('hadoop fs -put ' + full_destination_path + ' ' +
                                     stream.hdfs_dir, shell=True)
                 except OSError:
                     self.logger.error("Could not upload file to HDFS " + current_file + ' ' + stream.hdfs_dir)
@@ -242,7 +242,7 @@ class HadoopFileIngestionTool(object):
                     ftp_wrapper.archive(stream.remote_directory, current_file, "error")
                     continue
 
-                ret_code = subprocess.call('hdfs dfs -rm ' + full_hdfs_path, shell=True)
+                ret_code = subprocess.call('hadoop fs -rm ' + full_hdfs_path, shell=True)
                 if ret_code != 0:
                     self.logger.error("HDFS DELETION. Filename: " + full_hdfs_path)
                 self.logger.info("SUCCESS: HDFS DELETION. Filename: " + full_hdfs_path)
